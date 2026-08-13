@@ -53,10 +53,10 @@ var HyperVHostNicName = '${HyperVHostName}-NIC'
 var BastionNsgName = '${BastionHostName}-NSG'
 var BastionHostName = '${HyperVHostName}-bastion'
 var Bastion_PUBIPName = '${BastionHostName}-PIP'
-var HyperVHostConfigURL = 'https://github.com/weeyin83/Lab-Deployment-in-Azure/blob/main/HyperVHostConfig.zip?raw=true'
+var HyperVHostConfigURL = 'https://github.com/AdonisLL/Lab-Deployment-in-Azure/blob/main/HyperVHostConfig.zip?raw=true'
 var HyperVHostInstallHyperVScriptFolder = '.'
 var HyperVHostInstallHyperVScriptFileName = 'InstallHyperV.ps1'
-var HyperVHostInstallHyperVURL = 'https://raw.githubusercontent.com/weeyin83/Lab-Deployment-in-Azure/main/InstallHyperV.ps1'
+var HyperVHostInstallHyperVURL = 'https://raw.githubusercontent.com/AdonisLL/Lab-Deployment-in-Azure/main/InstallHyperV.ps1'
 
 resource HyperVHost_NSG 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: HyperVHost_NSG_Name

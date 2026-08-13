@@ -158,7 +158,7 @@ Configuration Main
 
 					$dataPartitions = @(Get-Partition -DiskNumber $dataDisk.Number -ErrorAction SilentlyContinue | Where-Object Type -eq 'Basic')
 					if ($dataPartitions.Count -eq 0) {
-						$dataPartition = New-Partition -DiskNumber $dataDisk.Number -UseMaximumSize
+						$dataPartition = New-Partition -DiskNumber $dataDisk.Number -UseMaximumSize -DriveLetter $dataDriveLetter
 					}
 					elseif ($dataPartitions.Count -eq 1) {
 						$dataPartition = $dataPartitions[0]
@@ -168,15 +168,22 @@ Configuration Main
 					}
 					if ($dataPartition.DriveLetter -ne $dataDriveLetter) {
 						Set-Partition -DiskNumber $dataDisk.Number -PartitionNumber $dataPartition.PartitionNumber -NewDriveLetter $dataDriveLetter
+						$dataPartition = Get-Partition -DiskNumber $dataDisk.Number -PartitionNumber $dataPartition.PartitionNumber
 					}
 
-					$dataVolume = Get-Volume -DriveLetter $dataDriveLetter
+					$dataVolume = $dataPartition | Get-Volume -ErrorAction SilentlyContinue
 					if ([string]::IsNullOrWhiteSpace($dataVolume.FileSystem)) {
-						Format-Volume -DriveLetter $dataDriveLetter -FileSystem NTFS -NewFileSystemLabel 'AzureLabData' -Confirm:$false | Out-Null
+						$dataPartition | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'AzureLabData' -Confirm:$false | Out-Null
 					}
 					elseif ($dataVolume.FileSystem -ne 'NTFS' -or $dataVolume.FileSystemLabel -ne 'AzureLabData') {
 						throw 'The managed Azure lab data disk contains an unexpected filesystem or label.'
 					}
+				}
+				for ($attempt = 1; $attempt -le 30 -and -not (Test-Path -LiteralPath "${dataDriveLetter}:\" -PathType Container); $attempt++) {
+					Start-Sleep -Seconds 2
+				}
+				if (-not (Test-Path -LiteralPath "${dataDriveLetter}:\" -PathType Container)) {
+					throw "The Azure lab data volume was not available as drive ${dataDriveLetter}: after 60 seconds."
 				}
 
 				New-Item -Path $downloadFolder, $vmFolder -ItemType Directory -Force | Out-Null

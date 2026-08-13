@@ -1,22 +1,44 @@
+@description('Local administrator username for the Hyper-V host.')
 @minLength(1)
+@maxLength(20)
 param HyperVHostAdminUserName string 
 
+@description('Local administrator password for the Hyper-V host.')
 @minLength(8)
 @secure()
 param HyperVHostAdminPassword string
 
+@description('Azure region for all lab resources.')
 param location string = resourceGroup().location
 
-param HyperVHostName string = 'updateme'
+@description('Name of the Hyper-V host. Defaults to a deterministic, resource-group-specific name.')
+@minLength(1)
+@maxLength(15)
+param HyperVHostName string = take('hv${uniqueString(resourceGroup().id)}', 15)
 
-@description('Specify whether to provision new vnet or deploy to existing vnet')
+@description('Specify whether to provision a new virtual network or deploy into an existing virtual network.')
 @allowed([
   'new'
   'existing'
 ])
 param vnetNewOrExisting string
 
-var OnPremVNETName = 'OnPremVNET'
+@description('Virtual network name. For new deployments, the default is deterministic and unique to the resource group.')
+@minLength(2)
+@maxLength(64)
+param virtualNetworkName string = vnetNewOrExisting == 'new'
+  ? 'lab-vnet-${uniqueString(resourceGroup().id)}'
+  : 'OnPremVNET'
+
+@description('Changes on each deployment so VM extensions apply updated configuration packages.')
+param deploymentRunId string = utcNow('u')
+
+@description('Indicates that the VM host subnet already exists and must not be modified.')
+param vmHostSubnetExists bool = false
+
+@description('Indicates that AzureBastionSubnet already exists and must not be modified.')
+param bastionSubnetExists bool = false
+
 var OnPremVNETPrefix = '10.0.0.0/16'
 var OnPremVNETSubnet1Name = 'VMHOST'
 var OnPremVNETSubnet1Prefix = '10.0.0.0/24'
@@ -24,8 +46,8 @@ var OnPremVNETBastionSubnetName = 'AzureBastionSubnet'
 var OnPremVNETBastionSubnetPrefix = '10.0.1.0/24'
 var HyperVHostImagePublisher = 'MicrosoftWindowsServer'
 var HyperVHostImageOffer = 'WindowsServer'
-var HyperVHostWindowsOSVersion = '2022-Datacenter'
-var HyperVHostVmSize = 'Standard_D8s_v3'
+var HyperVHostWindowsOSVersion = '2022-datacenter-g2'
+var HyperVHostVmSize = 'Standard_D8s_v7'
 var HyperVHost_NSG_Name = '${HyperVHostName}-NSG'
 var HyperVHostNicName = '${HyperVHostName}-NIC'
 var BastionNsgName = '${BastionHostName}-NSG'
@@ -36,7 +58,7 @@ var HyperVHostInstallHyperVScriptFolder = '.'
 var HyperVHostInstallHyperVScriptFileName = 'InstallHyperV.ps1'
 var HyperVHostInstallHyperVURL = 'https://raw.githubusercontent.com/weeyin83/Lab-Deployment-in-Azure/main/InstallHyperV.ps1'
 
-resource HyperVHost_NSG 'Microsoft.Network/networkSecurityGroups@2022-07-01' = {
+resource HyperVHost_NSG 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: HyperVHost_NSG_Name
   location: location
   tags: {
@@ -62,7 +84,7 @@ resource HyperVHost_NSG 'Microsoft.Network/networkSecurityGroups@2022-07-01' = {
   }
 }
 
-resource bastionNsg 'Microsoft.Network/networkSecurityGroups@2022-07-01' = {
+resource bastionNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: BastionNsgName
   location: location
   properties: {
@@ -213,8 +235,8 @@ resource bastionNsg 'Microsoft.Network/networkSecurityGroups@2022-07-01' = {
   }
 }
 
-resource OnPremVNET 'Microsoft.Network/virtualNetworks@2022-07-01' = if (vnetNewOrExisting == 'new'){
-  name: OnPremVNETName
+resource OnPremVNET 'Microsoft.Network/virtualNetworks@2024-07-01' = if (vnetNewOrExisting == 'new') {
+  name: virtualNetworkName
   location: location
   tags: {
     Purpose: 'LabDeployment'
@@ -246,14 +268,35 @@ resource OnPremVNET 'Microsoft.Network/virtualNetworks@2022-07-01' = if (vnetNew
       }
     ]
   }
-  dependsOn: []
 }
 
-// if vnetNewOrExisting == 'existing', reference an existing vnet and create a new subnet under it
-resource existingVirtualNetwork 'Microsoft.Network/virtualNetworks@2022-07-01' existing = if (vnetNewOrExisting == 'existing') {
-  name: OnPremVNETName
+// Existing child resources are updated in place when they are already present.
+resource existingVirtualNetwork 'Microsoft.Network/virtualNetworks@2024-07-01' existing = if (vnetNewOrExisting == 'existing') {
+  name: virtualNetworkName
 }
-resource subnet 'Microsoft.Network/virtualNetworks/subnets@2022-07-01' = if (vnetNewOrExisting == 'existing') {
+
+resource existingVmHostSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-07-01' existing = if (vnetNewOrExisting == 'existing' && vmHostSubnetExists) {
+  parent: existingVirtualNetwork
+  name: OnPremVNETSubnet1Name
+}
+
+resource newVmHostSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-07-01' = if (vnetNewOrExisting == 'existing' && !vmHostSubnetExists) {
+  parent: existingVirtualNetwork
+  name: OnPremVNETSubnet1Name
+  properties: {
+    addressPrefix: OnPremVNETSubnet1Prefix
+    networkSecurityGroup: {
+      id: HyperVHost_NSG.id
+    }
+  }
+}
+
+resource existingBastionSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-07-01' existing = if (vnetNewOrExisting == 'existing' && bastionSubnetExists) {
+  parent: existingVirtualNetwork
+  name: OnPremVNETBastionSubnetName
+}
+
+resource newBastionSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-07-01' = if (vnetNewOrExisting == 'existing' && !bastionSubnetExists) {
   parent: existingVirtualNetwork
   name: OnPremVNETBastionSubnetName
   properties: {
@@ -264,7 +307,7 @@ resource subnet 'Microsoft.Network/virtualNetworks/subnets@2022-07-01' = if (vne
   }
 }
 
-resource Bastion_PUBIP 'Microsoft.Network/publicIPAddresses@2022-07-01' = {
+resource Bastion_PUBIP 'Microsoft.Network/publicIPAddresses@2024-07-01' = {
   name: Bastion_PUBIPName
   sku:{
     name: 'Standard'
@@ -279,23 +322,20 @@ resource Bastion_PUBIP 'Microsoft.Network/publicIPAddresses@2022-07-01' = {
       domainNameLabel: BastionHostName
     }
   }
-  dependsOn: []
 }
 
-resource bastionHost 'Microsoft.Network/bastionHosts@2022-07-01' = {
+resource bastionHost 'Microsoft.Network/bastionHosts@2024-07-01' = {
   name: BastionHostName
   location: location
-  dependsOn: [
-    OnPremVNET
-    existingVirtualNetwork
-  ]
   properties: {
     ipConfigurations: [
       {
         name: 'IpConf'
         properties: {
           subnet: {
-            id: subnet.id
+            id: vnetNewOrExisting == 'new'
+              ? resourceId('Microsoft.Network/virtualNetworks/subnets', virtualNetworkName, OnPremVNETBastionSubnetName)
+              : (bastionSubnetExists ? existingBastionSubnet.id : newBastionSubnet.id)
           }
           publicIPAddress: {
             id: Bastion_PUBIP.id
@@ -304,9 +344,12 @@ resource bastionHost 'Microsoft.Network/bastionHosts@2022-07-01' = {
       }
     ]
   }
+  dependsOn: [
+    OnPremVNET
+  ]
 }
 
-resource HyperVHostNic 'Microsoft.Network/networkInterfaces@2022-07-01' = {
+resource HyperVHostNic 'Microsoft.Network/networkInterfaces@2024-07-01' = {
   name: HyperVHostNicName
   location: location
   tags: {
@@ -319,7 +362,9 @@ resource HyperVHostNic 'Microsoft.Network/networkInterfaces@2022-07-01' = {
         properties: {
           privateIPAllocationMethod: 'Dynamic'
           subnet: {
-            id: resourceId('Microsoft.Network/virtualNetworks/subnets',  OnPremVNETName, OnPremVNETSubnet1Name)
+            id: vnetNewOrExisting == 'new'
+              ? resourceId('Microsoft.Network/virtualNetworks/subnets', virtualNetworkName, OnPremVNETSubnet1Name)
+              : (vmHostSubnetExists ? existingVmHostSubnet.id : newVmHostSubnet.id)
           }
         }
       }
@@ -333,7 +378,7 @@ resource HyperVHostNic 'Microsoft.Network/networkInterfaces@2022-07-01' = {
   ]
 }
 
-resource HyperVHost 'Microsoft.Compute/virtualMachines@2022-11-01' = {
+resource HyperVHost 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: HyperVHostName
   location: location
   tags: {
@@ -359,6 +404,14 @@ resource HyperVHost 'Microsoft.Compute/virtualMachines@2022-11-01' = {
         createOption: 'FromImage'
         diskSizeGB: 500
       }
+      dataDisks: [
+        {
+          lun: 0
+          createOption: 'Empty'
+          diskSizeGB: 512
+          caching: 'None'
+        }
+      ]
     }
     networkProfile: {
       networkInterfaces: [
@@ -368,12 +421,9 @@ resource HyperVHost 'Microsoft.Compute/virtualMachines@2022-11-01' = {
       ]
     }
   }
-  dependsOn: [
-    OnPremVNET
-  ]
 }
 
-resource HyperVHostName_InstallHyperV 'Microsoft.Compute/virtualMachines/extensions@2022-11-01' = {
+resource HyperVHostName_InstallHyperV 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = {
   parent: HyperVHost
   name: 'InstallHyperV'
   location: location
@@ -385,16 +435,17 @@ resource HyperVHostName_InstallHyperV 'Microsoft.Compute/virtualMachines/extensi
     type: 'CustomScriptExtension'
     typeHandlerVersion: '1.4'
     autoUpgradeMinorVersion: true
+    forceUpdateTag: deploymentRunId
     settings: {
       fileUris: [
         HyperVHostInstallHyperVURL
       ]
-      commandToExecute: 'powershell -ExecutionPolicy Unrestricted -File ${HyperVHostInstallHyperVScriptFolder}/${HyperVHostInstallHyperVScriptFileName}'
+      commandToExecute: 'powershell -NoProfile -ExecutionPolicy Bypass -File ${HyperVHostInstallHyperVScriptFolder}/${HyperVHostInstallHyperVScriptFileName}'
     }
   }
 }
 
-resource HyperVHostName_HyperVHostConfig 'Microsoft.Compute/virtualMachines/extensions@2022-11-01' = {
+resource HyperVHostName_HyperVHostConfig 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = {
   parent: HyperVHost
   name: 'HyperVHostConfig'
   location: location
@@ -402,10 +453,11 @@ resource HyperVHostName_HyperVHostConfig 'Microsoft.Compute/virtualMachines/exte
     displayName: 'HyperVHostConfig'
   }
   properties: {
-    publisher: 'Microsoft.Powershell'
+    publisher: 'Microsoft.PowerShell'
     type: 'DSC'
     typeHandlerVersion: '2.9'
     autoUpgradeMinorVersion: true
+    forceUpdateTag: deploymentRunId
     settings: {
       configuration: {
         url: concat(HyperVHostConfigURL)
